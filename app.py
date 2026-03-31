@@ -1,12 +1,15 @@
+# app.py （Render 生产优化版）
 from flask import Flask, render_template, jsonify, request
 import feedparser, requests, sqlite3, time
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import config
+import os
 
 app = Flask(__name__)
 DB = 'news.db'
+scheduler = BackgroundScheduler()
 
 def init_db():
     conn = sqlite3.connect(DB)
@@ -29,7 +32,7 @@ def get_category(title, summary):
         return "energy"
     if any(kw in text for kw in config.KEYWORDS_MINERALS):
         return "minerals"
-    return "energy"  # 默认能源
+    return "energy"
 
 def scrape_all():
     conn = sqlite3.connect(DB)
@@ -45,35 +48,39 @@ def scrape_all():
                         cat = get_category(title, summary)
                         c.execute("INSERT OR IGNORE INTO news VALUES (?,?,?,?,?,?,?)",
                                   (None, title, summary, entry.link, src["name"], 
-                                   entry.get("published", datetime.now().strftime("%Y-%m-%d")), cat))
+                                   entry.get("published", datetime.now().strftime("%Y-%m-%d %H:%M")), cat))
             elif src["type"] == "scrape":
                 headers = {"User-Agent": "Mozilla/5.0"}
-                r = requests.get(src["url"], headers=headers, timeout=10)
+                r = requests.get(src["url"], headers=headers, timeout=15)
                 soup = BeautifulSoup(r.text, 'html.parser')
-                articles = soup.select(src.get("selectors", {}).get("list", "article") or "article")
+                articles = soup.select("article")
                 for art in articles[:6]:
-                    title_tag = art.select_one(src.get("selectors", {}).get("title", "h2"))
-                    link_tag = art.select_one(src.get("selectors", {}).get("link", "a"))
+                    title_tag = art.select_one("h2") or art.select_one("h1") or art.select_one(".title")
+                    link_tag = art.select_one("a")
                     if title_tag and link_tag:
                         title = title_tag.get_text(strip=True)
                         link = link_tag.get("href")
-                        if not link.startswith("http"): link = src["url"] + link
-                        summary = art.select_one(src.get("selectors", {}).get("summary", "p"))
-                        summary = summary.get_text(strip=True)[:300] if summary else ""
+                        if not link.startswith("http"):
+                            link = src["url"].rstrip("/") + "/" + link.lstrip("/")
+                        summary_tag = art.select_one("p")
+                        summary = summary_tag.get_text(strip=True)[:300] if summary_tag else ""
                         if is_relevant(title, summary):
                             cat = get_category(title, summary)
                             c.execute("INSERT OR IGNORE INTO news VALUES (?,?,?,?,?,?,?)",
-                                      (None, title, summary, link, src["name"], datetime.now().strftime("%Y-%m-%d"), cat))
+                                      (None, title, summary, link, src["name"], 
+                                       datetime.now().strftime("%Y-%m-%d %H:%M"), cat))
         except Exception as e:
-            print(f"抓取 {src['name']} 失败: {e}")
+            print(f"抓取 {src.get('name', '未知')} 失败: {e}")
     conn.commit()
     conn.close()
 
-# 定时任务
-scheduler = BackgroundScheduler()
+# ==================== 启动时自动执行 ====================
+init_db()
+scrape_all()                    # 部署后立即抓取一次
 scheduler.add_job(scrape_all, 'interval', minutes=30)
 scheduler.start()
 
+# ==================== 路由 ====================
 @app.route('/')
 def home():
     conn = sqlite3.connect(DB)
@@ -102,7 +109,6 @@ def api_news():
 def sources():
     return render_template('sources.html')
 
+# 本地测试时才执行（Render 上不会执行）
 if __name__ == '__main__':
-    init_db()
-    scrape_all()  # 启动时立即抓取一次
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)
