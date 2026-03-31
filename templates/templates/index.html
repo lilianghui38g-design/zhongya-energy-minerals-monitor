@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>中亚能矿新闻监测中心</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+  <style>
+    .hero { background: linear-gradient(rgba(15,23,42,0.85), rgba(15,23,42,0.85)), url('https://picsum.photos/id/1015/1920/1080'); }
+    .card { transition: all 0.3s; }
+    .card:hover { transform: translateY(-8px); box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+  </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+  <!-- 导航（Carnegie 风格） -->
+  <nav class="bg-white dark:bg-slate-900 border-b sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-8 py-5 flex justify-between items-center">
+      <div class="flex items-center gap-4">
+        <i class="fa-solid fa-atom text-4xl text-blue-700"></i>
+        <div>
+          <h1 class="text-3xl font-bold tracking-tighter">中亚能矿新闻监测中心</h1>
+          <p class="text-sm text-slate-500 dark:text-slate-400">美西方动态 · 实时抓取</p>
+        </div>
+      </div>
+      <div class="flex gap-8 font-medium text-lg">
+        <a href="/" class="hover:text-blue-700">首页</a>
+        <a href="#" onclick="loadCategory('energy')" class="tab energy-tab text-blue-700">能源动态</a>
+        <a href="#" onclick="loadCategory('minerals')" class="tab minerals-tab">矿产动态</a>
+        <a href="/sources" class="hover:text-blue-700">来源库</a>
+      </div>
+      <div class="flex items-center gap-3">
+        <input id="searchInput" type="text" placeholder="搜索 US / 通道 / 关键矿产..." 
+               class="bg-white dark:bg-slate-800 border border-slate-300 rounded-3xl px-5 py-3 w-80 focus:outline-none">
+        <button onclick="alert('警报已开启：新美西方动态将推送')" class="bg-blue-700 text-white px-6 py-3 rounded-3xl flex items-center gap-2">
+          <i class="fa-solid fa-bell"></i> 警报
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <div class="hero h-96 flex items-center text-white">
+    <div class="max-w-7xl mx-auto px-8">
+      <span class="bg-white/20 text-xs px-4 py-1 rounded-3xl">最新更新 {{ datetime.now().strftime('%Y-%m-%d %H:%M') }}</span>
+      <h2 class="text-6xl font-bold leading-none mt-6">美国推动中亚关键矿产与能源通道多元化</h2>
+      <p class="mt-8 text-2xl max-w-xl">本中心实时抓取 35+ 来源 · 今日新增 {{ news|length }} 条</p>
+    </div>
+  </div>
+
+  <div class="max-w-7xl mx-auto px-8 py-12">
+    <div id="newsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+      <!-- 动态渲染卡片 -->
+      {% for item in news %}
+      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-3xl p-7 card">
+        <div class="flex justify-between text-xs uppercase tracking-widest text-slate-400">
+          <span>{{ item[4] }}</span>
+          <span>{{ item[5] }}</span>
+        </div>
+        <h3 class="font-semibold text-xl mt-4 line-clamp-2">{{ item[1] }}</h3>
+        <p class="text-slate-600 dark:text-slate-400 mt-3 line-clamp-3">{{ item[2] }}</p>
+        <div class="mt-6 flex justify-between">
+          <span class="px-4 py-1 text-xs rounded-3xl bg-emerald-100 text-emerald-700">{{ item[6] == 'energy' ? '能源' : '矿产' }}</span>
+          <a href="{{ item[3] }}" target="_blank" class="text-blue-700 flex items-center text-sm">阅读原文 →</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    function loadCategory(cat) {
+      fetch(`/api/news?category=${cat}`)
+        .then(r => r.json())
+        .then(data => {
+          let html = '';
+          data.forEach(item => {
+            html += `
+              <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-3xl p-7 card">
+                <div class="flex justify-between text-xs uppercase tracking-widest text-slate-400">
+                  <span>${item.source}</span><span>${item.date}</span>
+                </div>
+                <h3 class="font-semibold text-xl mt-4 line-clamp-2">${item.title}</h3>
+                <p class="text-slate-600 dark:text-slate-400 mt-3 line-clamp-3">${item.summary}</p>
+                <div class="mt-6 flex justify-between">
+                  <span class="px-4 py-1 text-xs rounded-3xl ${item.category==='energy' ? 'bg-amber-100 text-amber-700' : 'bg-teal-100 text-teal-700'}">
+                    ${item.category==='energy' ? '能源' : '矿产'}
+                  </span>
+                  <a href="${item.url}" target="_blank" class="text-blue-700 flex items-center text-sm">阅读原文 →</a>
+                </div>
+              </div>`;
+          });
+          document.getElementById('newsContainer').innerHTML = html;
+        });
+    }
+    // 初始加载
+    window.onload = () => loadCategory('all');
+  </script>
+</body>
+</html>
