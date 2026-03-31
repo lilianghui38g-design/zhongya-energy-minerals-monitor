@@ -1,114 +1,122 @@
-# app.py （Render 生产优化版）
+# app.py （Render 稳定简化版 - 无数据库、无 config）
 from flask import Flask, render_template, jsonify, request
-import feedparser, requests, sqlite3, time
+import feedparser
+import requests
 from bs4 import BeautifulSoup
-from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
-import config
 import os
 
 app = Flask(__name__)
-DB = 'news.db'
-scheduler = BackgroundScheduler()
 
-def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS news 
-                 (id INTEGER PRIMARY KEY, title TEXT, summary TEXT, url TEXT, 
-                  source TEXT, date TEXT, category TEXT)''')
-    conn.commit()
-    conn.close()
+# ==================== 数据存储（内存版，避免 Render 文件系统问题） ====================
+news_list = []  # 全局列表，存储所有新闻
+
+# ==================== 来源列表（已内置，无需 config.py） ====================
+SOURCES = [
+    {"name": "Eurasianet", "url": "https://eurasianet.org/feed", "type": "rss"},
+    {"name": "Carnegie", "url": "https://carnegieendowment.org/rss", "type": "rss"},
+    {"name": "CFR", "url": "https://www.cfr.org/rss", "type": "rss"},
+    {"name": "US State Dept", "url": "https://www.state.gov/rss", "type": "rss"},
+    {"name": "Atlantic Council", "url": "https://www.atlanticcouncil.org/feed/", "type": "rss"},
+    {"name": "CSIS", "url": "https://www.csis.org/rss", "type": "rss"},
+    {"name": "Caspian Policy Center", "url": "https://www.caspianpolicy.org/research", "type": "scrape"},
+    {"name": "Times of Central Asia", "url": "https://timesca.com/", "type": "scrape"},
+]
+
+KEYWORDS_US = ["US", "United States", "America", "Washington", "State Department", "C5+1"]
+KEYWORDS_CA = ["Kazakhstan", "Kyrgyzstan", "Uzbekistan", "Tajikistan", "Turkmenistan", "Central Asia", "Middle Corridor"]
+KEYWORDS_ENERGY = ["energy", "gas", "oil", "corridor", "pipeline"]
+KEYWORDS_MINERALS = ["minerals", "critical minerals", "uranium", "rare earth", "lithium"]
 
 def is_relevant(title, summary):
     text = (title + " " + summary).lower()
-    has_us = any(kw.lower() in text for kw in config.KEYWORDS_US)
-    has_ca = any(kw.lower() in text for kw in config.KEYWORDS_CA)
-    return has_us and has_ca
+    return any(kw.lower() in text for kw in KEYWORDS_US) and any(kw.lower() in text for kw in KEYWORDS_CA)
 
 def get_category(title, summary):
     text = (title + " " + summary).lower()
-    if any(kw in text for kw in config.KEYWORDS_ENERGY):
+    if any(kw in text for kw in KEYWORDS_ENERGY):
         return "energy"
-    if any(kw in text for kw in config.KEYWORDS_MINERALS):
+    if any(kw in text for kw in KEYWORDS_MINERALS):
         return "minerals"
     return "energy"
 
 def scrape_all():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    for src in config.SOURCES:
+    global news_list
+    new_items = []
+    for src in SOURCES:
         try:
             if src["type"] == "rss":
                 feed = feedparser.parse(src["url"])
-                for entry in feed.entries[:8]:
+                for entry in feed.entries[:6]:
                     title = entry.title
                     summary = entry.get("summary", entry.get("description", ""))[:300]
                     if is_relevant(title, summary):
                         cat = get_category(title, summary)
-                        c.execute("INSERT OR IGNORE INTO news VALUES (?,?,?,?,?,?,?)",
-                                  (None, title, summary, entry.link, src["name"], 
-                                   entry.get("published", datetime.now().strftime("%Y-%m-%d %H:%M")), cat))
-            elif src["type"] == "scrape":
+                        new_items.append({
+                            "title": title,
+                            "summary": summary,
+                            "url": entry.link,
+                            "source": src["name"],
+                            "date": entry.get("published", datetime.now().strftime("%Y-%m-%d %H:%M")),
+                            "category": cat
+                        })
+            else:  # scrape
                 headers = {"User-Agent": "Mozilla/5.0"}
                 r = requests.get(src["url"], headers=headers, timeout=15)
                 soup = BeautifulSoup(r.text, 'html.parser')
-                articles = soup.select("article")
-                for art in articles[:6]:
-                    title_tag = art.select_one("h2") or art.select_one("h1") or art.select_one(".title")
+                articles = soup.select("article")[:6]
+                for art in articles:
+                    title_tag = art.select_one("h2, h1, .title")
                     link_tag = art.select_one("a")
                     if title_tag and link_tag:
                         title = title_tag.get_text(strip=True)
                         link = link_tag.get("href")
                         if not link.startswith("http"):
                             link = src["url"].rstrip("/") + "/" + link.lstrip("/")
-                        summary_tag = art.select_one("p")
-                        summary = summary_tag.get_text(strip=True)[:300] if summary_tag else ""
+                        summary = (art.select_one("p").get_text(strip=True)[:300] if art.select_one("p") else "")
                         if is_relevant(title, summary):
                             cat = get_category(title, summary)
-                            c.execute("INSERT OR IGNORE INTO news VALUES (?,?,?,?,?,?,?)",
-                                      (None, title, summary, link, src["name"], 
-                                       datetime.now().strftime("%Y-%m-%d %H:%M"), cat))
+                            new_items.append({
+                                "title": title,
+                                "summary": summary,
+                                "url": link,
+                                "source": src["name"],
+                                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                "category": cat
+                            })
         except Exception as e:
-            print(f"抓取 {src.get('name', '未知')} 失败: {e}")
-    conn.commit()
-    conn.close()
+            print(f"⚠️ 抓取 {src['name']} 失败: {e}")  # 会显示在 Render Logs
+    # 合并最新数据（去重）
+    news_list = new_items + news_list
+    news_list = news_list[:50]  # 只保留最新50条
 
-# ==================== 启动时自动执行 ====================
-init_db()
-scrape_all()                    # 部署后立即抓取一次
-scheduler.add_job(scrape_all, 'interval', minutes=30)
-scheduler.start()
+# ==================== 启动时立即抓取 ====================
+scrape_all()
 
 # ==================== 路由 ====================
 @app.route('/')
 def home():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT * FROM news ORDER BY date DESC LIMIT 12")
-    news = c.fetchall()
-    conn.close()
-    return render_template('index.html', news=news)
+    return render_template('index.html', news=news_list)
 
 @app.route('/api/news')
 def api_news():
     category = request.args.get('category', 'all')
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
     if category == 'energy':
-        c.execute("SELECT * FROM news WHERE category='energy' ORDER BY date DESC LIMIT 20")
+        data = [n for n in news_list if n["category"] == "energy"][:20]
     elif category == 'minerals':
-        c.execute("SELECT * FROM news WHERE category='minerals' ORDER BY date DESC LIMIT 20")
+        data = [n for n in news_list if n["category"] == "minerals"][:20]
     else:
-        c.execute("SELECT * FROM news ORDER BY date DESC LIMIT 30")
-    data = [{"id":r[0],"title":r[1],"summary":r[2],"url":r[3],"source":r[4],"date":r[5],"category":r[6]} for r in c.fetchall()]
-    conn.close()
+        data = news_list[:30]
     return jsonify(data)
 
 @app.route('/sources')
 def sources():
     return render_template('sources.html')
 
-# 本地测试时才执行（Render 上不会执行）
+# 测试路由（访问 /debug 看是否正常）
+@app.route('/debug')
+def debug():
+    return {"status": "ok", "news_count": len(news_list), "message": "网站正常运行！"}
+
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
