@@ -1,0 +1,10 @@
+
+**requirements.txt**
+```txt
+flask==3.1.0
+feedparser==6.0.11
+requests==2.32.3
+beautifulsoup4==4.12.3
+apscheduler==3.10.4
+jinja2==3.1.6
+gunicorn==23.0.0  # 生产部署用
